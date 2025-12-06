@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Credentials ###
+application.properties
+google-credentials.json
+
+
+### Uploads ###
+/uploads/
