@@ -1,0 +1,46 @@
+name: Deploy to GCP VM
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # SSH setup
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.8.1
+        with:
+          ssh-private-key: ${{ secrets.VM_SSH_KEY }}
+
+      # Deploy to VM
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_IP }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            cd /home/YOUR_USER/YOUR_REPO
+
+            # Pull latest code
+            git pull
+
+            # Load secrets from GCP Secret Manager
+            export SPRING_DATASOURCE_USERNAME=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_USERNAME)
+            export SPRING_DATASOURCE_PASSWORD=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_PASSWORD)
+            export SPRING_DATASOURCE_URL=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_URL)
+            gcloud secrets versions access latest --secret=GOOGLE_CREDENTIALS_JSON > /tmp/google.json
+            export GOOGLE_APPLICATION_CREDENTIALS=/tmp/google.json
+            export GOOGLE_CLOUD_PROJECT_ID=$(gcloud secrets versions access latest --secret=GOOGLE_CLOUD_PROJECT_ID)
+
+            # Start containers
+            docker-compose down
+            docker-compose up -d --build
