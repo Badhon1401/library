@@ -60,8 +60,8 @@ jobs:
             export SPRING_DATASOURCE_PASSWORD=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_PASSWORD)
             export SPRING_DATASOURCE_URL=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_URL)
             export GOOGLE_CLOUD_PROJECT_ID=$(gcloud secrets versions access latest --secret=GOOGLE_CLOUD_PROJECT_ID)
-            
-            # Download Google credentials JSON file
+
+  # Download Google credentials JSON file
             gcloud secrets versions access latest --secret=GOOGLE_CREDENTIALS_JSON > credentials/google-credentials.json
             
             # Set permissions
