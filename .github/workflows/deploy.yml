@@ -6,19 +6,37 @@ on:
       - master
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout code
+      # Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # SSH setup
+      # Set up JDK 17 for building
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # Build the application (optional - can build on VM instead)
+      - name: Build with Maven
+        run: mvn clean package -DskipTests
+
+      # Set up SSH
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.8.1
         with:
           ssh-private-key: ${{ secrets.VM_SSH_KEY }}
+
+      # Add VM to known hosts
+      - name: Add VM to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.VM_IP }} >> ~/.ssh/known_hosts
 
       # Deploy to VM
       - name: Deploy via SSH
@@ -28,19 +46,55 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
-            cd /home/YOUR_USER/YOUR_REPO
-
-            # Pull latest code
-            git pull
-
-            # Load secrets from GCP Secret Manager
+            # Navigate to your cloned repo on the VM
+            cd /home/mdmamunur_rashid/IthraLibrary/library
+            
+            # Pull the latest code
+            git pull origin master
+            
+            # Create credentials directory if it doesn't exist
+            mkdir -p credentials
+            
+            # Load secrets from GCP Secret Manager and export as environment variables
             export SPRING_DATASOURCE_USERNAME=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_USERNAME)
             export SPRING_DATASOURCE_PASSWORD=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_PASSWORD)
             export SPRING_DATASOURCE_URL=$(gcloud secrets versions access latest --secret=SPRING_DATASOURCE_URL)
-            gcloud secrets versions access latest --secret=GOOGLE_CREDENTIALS_JSON > /tmp/google.json
-            export GOOGLE_APPLICATION_CREDENTIALS=/tmp/google.json
             export GOOGLE_CLOUD_PROJECT_ID=$(gcloud secrets versions access latest --secret=GOOGLE_CLOUD_PROJECT_ID)
-
-            # Start containers
+            
+            # Download Google credentials JSON file
+            gcloud secrets versions access latest --secret=GOOGLE_CREDENTIALS_JSON > credentials/google-credentials.json
+            
+            # Set permissions
+            chmod 600 credentials/google-credentials.json
+            
+            # Build the application on VM
+            mvn clean package -DskipTests
+            
+            # Stop existing containers
             docker-compose down
+            
+            # Remove old images to save space
+            docker image prune -f
+            
+            # Start containers with environment variables
             docker-compose up -d --build
+            
+            # Show logs
+            docker-compose logs -f --tail=100
+
+      # Verify deployment
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_IP }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            # Wait for application to start
+            sleep 30
+            
+            # Check if containers are running
+            docker ps
+            
+            # Check application health
+            curl -f http://localhost:8080/actuator/health || echo "Health check failed"

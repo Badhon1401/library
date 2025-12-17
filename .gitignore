@@ -35,7 +35,7 @@ build/
 ### Credentials ###
 application.properties
 google-credentials.json
-
+.env
 
 ### Uploads ###
 /uploads/
