@@ -7,6 +7,9 @@ COPY pom.xml .
 COPY mvnw .
 COPY .mvn .mvn
 
+# Make mvnw executable
+RUN chmod +x mvnw
+
 # Copy source code
 COPY src ./src
 
@@ -14,8 +17,11 @@ COPY src ./src
 RUN ./mvnw clean package -DskipTests
 
 # Stage 2: Create the runtime image
-FROM eclipse-temurin:17-jdk-alpine
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
 
 # Copy the jar from builder stage
 COPY --from=builder /build/target/*.jar app.jar
