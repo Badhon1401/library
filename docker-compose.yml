@@ -22,7 +22,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -34,7 +33,6 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-
 
   app:
     build:
@@ -76,7 +74,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  pgdata:           # ✅ SAME AS OLD → DATA PRESERVED
+  pgdata:
   redis_data:
   upload_data:
   hls_data:

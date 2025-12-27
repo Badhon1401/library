@@ -1,9 +1,26 @@
-FROM eclipse-temurin:17-jdk-alpine
+# Stage 1: Build the app
+FROM eclipse-temurin:17-jdk-alpine AS builder
+WORKDIR /build
 
+# Copy Maven files first for caching dependencies
+COPY pom.xml .
+COPY mvnw .
+COPY .mvn .mvn
+
+# Copy source code
+COPY src ./src
+
+# Build the jar (skip tests if you want faster builds)
+RUN ./mvnw clean package -DskipTests
+
+# Stage 2: Create the runtime image
+FROM eclipse-temurin:17-jdk-alpine
 WORKDIR /app
 
+# Copy the jar from builder stage
 COPY --from=builder /build/target/*.jar app.jar
 
+# Setup directories and user
 RUN mkdir -p /app/uploads /app/hls-streams /app/logs /app/credentials && \
     addgroup -S appuser && adduser -S appuser -G appuser && \
     chown -R appuser:appuser /app
