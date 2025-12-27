@@ -5,16 +5,15 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class QueryMatch {
+public class RecentActivity {
     private String type;
     private String description;
-    private Integer frameNumber;
-    private Double timestamp;
-    private Double confidence;
-    private BoundingBox boundingBox;
-    private String aiContext;
+    private LocalDateTime timestamp;
+    private Long mediaFileId;
 }

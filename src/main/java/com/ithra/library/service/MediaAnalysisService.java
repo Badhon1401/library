@@ -1,23 +1,38 @@
 package com.ithra.library.service;
 
+import com.ithra.library.config.VideoProcessingService;
 import com.ithra.library.dto.*;
-import com.ithra.library.entity.*;
-import com.ithra.library.repository.*;
+import com.ithra.library.entity.DetectedBook;
+import com.ithra.library.entity.DetectedObject;
+import com.ithra.library.entity.DetectedPerson;
+import com.ithra.library.entity.MediaFile;
+import com.ithra.library.repository.DetectedBookRepository;
+import com.ithra.library.repository.DetectedObjectRepository;
+import com.ithra.library.repository.DetectedPersonRepository;
+import com.ithra.library.repository.MediaFileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.time.LocalDateTime;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import static com.ithra.library.service.LiveStreamingService.*;
 
 @Service
 @RequiredArgsConstructor
@@ -30,13 +45,19 @@ public class MediaAnalysisService {
     private final DetectedBookRepository bookRepository;
     private final VisionAnalysisService visionService;
     private final VideoProcessingService videoService;
+    private final OpenAIService aiService;
 
     @Value("${app.upload.dir}")
     private String uploadDir;
 
+    /**
+     * Upload and analyze media file
+     */
     @Transactional
     public MediaFile uploadFile(MultipartFile file) throws Exception {
-        // Create upload directory if not exists
+        log.info("Uploading file: {}", file.getOriginalFilename());
+
+        // Create upload directory
         File directory = new File(uploadDir);
         if (!directory.exists()) {
             directory.mkdirs();
@@ -47,21 +68,22 @@ public class MediaAnalysisService {
         Path filePath = Paths.get(uploadDir, fileName);
         Files.copy(file.getInputStream(), filePath, StandardCopyOption.REPLACE_EXISTING);
 
-        // Create media file entity
-        MediaFile mediaFile = new MediaFile();
-        mediaFile.setFileName(file.getOriginalFilename());
-        mediaFile.setFilePath(filePath.toString());
-        mediaFile.setFileSize(file.getSize());
-        mediaFile.setUploadDate(LocalDateTime.now());
-        mediaFile.setStatus("PROCESSING");
-
         // Determine file type
         String contentType = file.getContentType();
+        MediaFile.FileType fileType = MediaFile.FileType.IMAGE;
         if (contentType != null && contentType.startsWith("video")) {
-            mediaFile.setFileType("VIDEO");
-        } else {
-            mediaFile.setFileType("IMAGE");
+            fileType = MediaFile.FileType.VIDEO;
         }
+
+        // Create media file entity
+        MediaFile mediaFile = MediaFile.builder()
+                .fileName(file.getOriginalFilename())
+                .filePath(filePath.toString())
+                .fileType(fileType)
+                .fileSize(file.getSize())
+                .status(MediaFile.ProcessingStatus.PROCESSING)
+                .isLive(false)
+                .build();
 
         mediaFile = mediaFileRepository.save(mediaFile);
 
@@ -71,6 +93,9 @@ public class MediaAnalysisService {
         return mediaFile;
     }
 
+    /**
+     * Process media file asynchronously
+     */
     @Async
     @Transactional
     public void processMediaAsync(Long mediaFileId) {
@@ -78,18 +103,33 @@ public class MediaAnalysisService {
                 .orElseThrow(() -> new RuntimeException("Media file not found"));
 
         try {
-            if ("IMAGE".equals(mediaFile.getFileType())) {
+            log.info("Starting processing for file: {}", mediaFile.getFileName());
+
+            if (mediaFile.getFileType() == MediaFile.FileType.IMAGE) {
                 processImage(mediaFile);
-            } else if ("VIDEO".equals(mediaFile.getFileType())) {
+            } else if (mediaFile.getFileType() == MediaFile.FileType.VIDEO) {
                 processVideo(mediaFile);
             }
 
-            mediaFile.setStatus("COMPLETED");
+            // Generate AI summary
+            MediaAnalysisResult analysis = getAnalysisResult(mediaFileId);
+            String summary = aiService.generateMediaSummary(analysis);
+            mediaFile.setAiSummary(summary);
+
+            // Update counts
+            mediaFile.setPeopleCount(analysis.getDetectedPeople().size());
+            mediaFile.setObjectsCount(analysis.getDetectedObjects().size());
+            mediaFile.setBooksCount(analysis.getDetectedBooks().size());
+
+            mediaFile.setStatus(MediaFile.ProcessingStatus.COMPLETED);
             mediaFileRepository.save(mediaFile);
+
+            log.info("Processing completed for file: {}", mediaFile.getFileName());
 
         } catch (Exception e) {
             log.error("Error processing media file", e);
-            mediaFile.setStatus("FAILED");
+            mediaFile.setStatus(MediaFile.ProcessingStatus.FAILED);
+            mediaFile.setErrorMessage(e.getMessage());
             mediaFileRepository.save(mediaFile);
         }
     }
@@ -97,100 +137,62 @@ public class MediaAnalysisService {
     private void processImage(MediaFile mediaFile) throws Exception {
         byte[] imageBytes = Files.readAllBytes(Paths.get(mediaFile.getFilePath()));
 
-        // Detect people
-        List<PersonInfo> people = visionService.detectPeople(imageBytes);
-        for (PersonInfo personInfo : people) {
-            DetectedPerson person = new DetectedPerson();
-            person.setMediaFile(mediaFile);
-            person.setUniqueId(personInfo.getUniqueId());
-            person.setAgeCategory(personInfo.getAgeCategory());
-            person.setEstimatedAge(personInfo.getEstimatedAge());
-            person.setGender(personInfo.getGender());
-            person.setConfidence(personInfo.getConfidence());
-            person.setEmotionalState(personInfo.getEmotionalState());
-            personRepository.save(person);
-        }
+        CompletableFuture<FrameAnalysisResult> future =
+                visionService.analyzeFrame(imageBytes, 0, 0.0);
 
-        // Detect objects
-        List<ObjectInfo> objects = visionService.detectObjects(imageBytes);
-        for (ObjectInfo objectInfo : objects) {
-            DetectedObject object = new DetectedObject();
-            object.setMediaFile(mediaFile);
-            object.setObjectName(objectInfo.getObjectName());
-            object.setCategory(objectInfo.getCategory());
-            object.setConfidence(objectInfo.getConfidence());
-            objectRepository.save(object);
-        }
+        FrameAnalysisResult result = future.join();
 
-        // Detect books
-        List<BookInfo> books = visionService.detectBooks(imageBytes);
-        for (BookInfo bookInfo : books) {
-            DetectedBook book = new DetectedBook();
-            book.setMediaFile(mediaFile);
-            book.setBookName(bookInfo.getBookName());
-            book.setAuthor(bookInfo.getAuthor());
-            book.setIsbn(bookInfo.getIsbn());
-            book.setUniqueId(bookInfo.getUniqueId());
-            book.setConfidence(bookInfo.getConfidence());
-            bookRepository.save(book);
-        }
+        // Save detections
+        saveDetections(result, mediaFile);
 
-        log.info("Image processing completed for file: {}", mediaFile.getFileName());
+        mediaFile.setTotalFramesProcessed(1);
     }
 
     private void processVideo(MediaFile mediaFile) throws Exception {
         List<VideoProcessingService.VideoFrame> frames =
                 videoService.extractFrames(mediaFile.getFilePath());
 
+        int processedFrames = 0;
+
         for (VideoProcessingService.VideoFrame frame : frames) {
-            // Detect people in frame
-            List<PersonInfo> people = visionService.detectPeople(frame.getImageBytes());
-            for (PersonInfo personInfo : people) {
-                DetectedPerson person = new DetectedPerson();
-                person.setMediaFile(mediaFile);
-                person.setUniqueId(personInfo.getUniqueId());
-                person.setAgeCategory(personInfo.getAgeCategory());
-                person.setEstimatedAge(personInfo.getEstimatedAge());
-                person.setGender(personInfo.getGender());
-                person.setConfidence(personInfo.getConfidence());
-                person.setEmotionalState(personInfo.getEmotionalState());
-                person.setFrameNumber(frame.getFrameNumber());
-                person.setTimestamp(frame.getTimestamp());
-                personRepository.save(person);
-            }
+            CompletableFuture<FrameAnalysisResult> future =
+                    visionService.analyzeFrame(
+                            frame.getImageBytes(),
+                            frame.getFrameNumber(),
+                            frame.getTimestamp()
+                    );
 
-            // Detect objects in frame
-            List<ObjectInfo> objects = visionService.detectObjects(frame.getImageBytes());
-            for (ObjectInfo objectInfo : objects) {
-                DetectedObject object = new DetectedObject();
-                object.setMediaFile(mediaFile);
-                object.setObjectName(objectInfo.getObjectName());
-                object.setCategory(objectInfo.getCategory());
-                object.setConfidence(objectInfo.getConfidence());
-                object.setFrameNumber(frame.getFrameNumber());
-                object.setTimestamp(frame.getTimestamp());
-                objectRepository.save(object);
-            }
-
-            // Detect books in frame
-            List<BookInfo> books = visionService.detectBooks(frame.getImageBytes());
-            for (BookInfo bookInfo : books) {
-                DetectedBook book = new DetectedBook();
-                book.setMediaFile(mediaFile);
-                book.setBookName(bookInfo.getBookName());
-                book.setAuthor(bookInfo.getAuthor());
-                book.setIsbn(bookInfo.getIsbn());
-                book.setUniqueId(bookInfo.getUniqueId());
-                book.setConfidence(bookInfo.getConfidence());
-                book.setFrameNumber(frame.getFrameNumber());
-                book.setTimestamp(frame.getTimestamp());
-                bookRepository.save(book);
-            }
+            FrameAnalysisResult result = future.join();
+            saveDetections(result, mediaFile);
+            processedFrames++;
         }
 
-        log.info("Video processing completed for file: {}", mediaFile.getFileName());
+        mediaFile.setTotalFramesProcessed(processedFrames);
     }
 
+    private void saveDetections(FrameAnalysisResult result, MediaFile mediaFile) {
+        // Save people
+        for (PersonInfo personInfo : result.getPeople()) {
+            DetectedPerson person = convertToPersonEntity(personInfo, mediaFile);
+            personRepository.save(person);
+        }
+
+        // Save objects
+        for (ObjectInfo objectInfo : result.getObjects()) {
+            DetectedObject object = convertToObjectEntity(objectInfo, mediaFile);
+            objectRepository.save(object);
+        }
+
+        // Save books
+        for (BookInfo bookInfo : result.getBooks()) {
+            DetectedBook book = convertToBookEntity(bookInfo, mediaFile);
+            bookRepository.save(book);
+        }
+    }
+
+    /**
+     * Get analysis result
+     */
     @Transactional(readOnly = true)
     public MediaAnalysisResult getAnalysisResult(Long mediaFileId) {
         MediaFile mediaFile = mediaFileRepository.findById(mediaFileId)
@@ -200,68 +202,121 @@ public class MediaAnalysisService {
         List<DetectedObject> objects = objectRepository.findByMediaFileId(mediaFileId);
         List<DetectedBook> books = bookRepository.findByMediaFileId(mediaFileId);
 
-        MediaAnalysisResult result = new MediaAnalysisResult();
-        result.setMediaFileId(mediaFile.getId());
-        result.setFileName(mediaFile.getFileName());
-        result.setFileType(mediaFile.getFileType());
-        result.setUploadDate(mediaFile.getUploadDate());
-        result.setStatus(mediaFile.getStatus());
-
-        // Convert entities to DTOs
-        result.setDetectedPeople(people.stream().map(this::convertToPersonInfo).collect(Collectors.toList()));
-        result.setDetectedObjects(objects.stream().map(this::convertToObjectInfo).collect(Collectors.toList()));
-        result.setDetectedBooks(books.stream().map(this::convertToBookInfo).collect(Collectors.toList()));
-
-        // Generate summary
-        result.setSummary(generateSummary(people.size(), objects.size(), books.size()));
-
-        return result;
+        return MediaAnalysisResult.builder()
+                .mediaFileId(mediaFile.getId())
+                .fileName(mediaFile.getFileName())
+                .fileType(mediaFile.getFileType().name())
+                .uploadDate(mediaFile.getUploadDate())
+                .status(mediaFile.getStatus().name())
+                .isLive(mediaFile.getIsLive())
+                .streamUrl(mediaFile.getStreamUrl())
+                .hlsPlaylistUrl(mediaFile.getHlsPlaylistUrl())
+                .totalFramesProcessed(mediaFile.getTotalFramesProcessed())
+                .duration(mediaFile.getDuration())
+                .frameRate(mediaFile.getFrameRate())
+                .detectedPeople(people.stream().map(LiveStreamingService::convertToPersonInfo).toList())
+                .detectedObjects(objects.stream().map(LiveStreamingService::convertToObjectInfo).toList())
+                .detectedBooks(books.stream().map(LiveStreamingService::convertToBookInfo).toList())
+                .aiSummary(mediaFile.getAiSummary())
+                .aiDescription(mediaFile.getAiDescription())
+                .statistics(buildStatistics(people, objects, books))
+                .build();
     }
 
-    public List<MediaFile> getAllMediaFiles() {
-        return mediaFileRepository.findAll();
+    /**
+     * List media files with pagination
+     */
+    public Page<MediaAnalysisResult> listMediaFiles(String fileType, String status,
+                                                    Pageable pageable) {
+        Page<MediaFile> mediaFiles;
+
+        if (fileType != null && status != null) {
+            mediaFiles = mediaFileRepository.findByFileTypeAndStatus(
+                    MediaFile.FileType.valueOf(fileType),
+                    MediaFile.ProcessingStatus.valueOf(status),
+                    pageable
+            );
+        } else {
+            mediaFiles = mediaFileRepository.findAll(pageable);
+        }
+
+        List<MediaAnalysisResult> results = mediaFiles.getContent().stream()
+                .map(mf -> getAnalysisResult(mf.getId()))
+                .collect(Collectors.toList());
+
+        return new PageImpl<>(results, pageable, mediaFiles.getTotalElements());
     }
 
-    private PersonInfo convertToPersonInfo(DetectedPerson person) {
-        PersonInfo info = new PersonInfo();
-        info.setId(person.getId());
-        info.setUniqueId(person.getUniqueId());
-        info.setAgeCategory(person.getAgeCategory());
-        info.setEstimatedAge(person.getEstimatedAge());
-        info.setGender(person.getGender());
-        info.setConfidence(person.getConfidence());
-        info.setEmotionalState(person.getEmotionalState());
-        info.setFrameNumber(person.getFrameNumber());
-        info.setTimestamp(person.getTimestamp());
-        return info;
+    /**
+     * Delete media file
+     */
+    @Transactional
+    public void deleteMediaFile(Long id) {
+        MediaFile mediaFile = mediaFileRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Media file not found"));
+
+        // Delete file from filesystem
+        try {
+            Files.deleteIfExists(Paths.get(mediaFile.getFilePath()));
+        } catch (Exception e) {
+            log.error("Error deleting file from filesystem", e);
+        }
+
+        mediaFileRepository.delete(mediaFile);
     }
 
-    private ObjectInfo convertToObjectInfo(DetectedObject object) {
-        ObjectInfo info = new ObjectInfo();
-        info.setId(object.getId());
-        info.setObjectName(object.getObjectName());
-        info.setCategory(object.getCategory());
-        info.setConfidence(object.getConfidence());
-        info.setFrameNumber(object.getFrameNumber());
-        info.setTimestamp(object.getTimestamp());
-        return info;
+    /**
+     * Get statistics for media file
+     */
+    public StatisticsInfo getStatistics(Long mediaFileId) {
+        List<DetectedPerson> people = personRepository.findByMediaFileId(mediaFileId);
+        List<DetectedObject> objects = objectRepository.findByMediaFileId(mediaFileId);
+        List<DetectedBook> books = bookRepository.findByMediaFileId(mediaFileId);
+
+        return buildStatistics(people, objects, books);
     }
 
-    private BookInfo convertToBookInfo(DetectedBook book) {
-        BookInfo info = new BookInfo();
-        info.setId(book.getId());
-        info.setBookName(book.getBookName());
-        info.setAuthor(book.getAuthor());
-        info.setIsbn(book.getIsbn());
-        info.setUniqueId(book.getUniqueId());
-        info.setConfidence(book.getConfidence());
-        info.setFrameNumber(book.getFrameNumber());
-        info.setTimestamp(book.getTimestamp());
-        return info;
+    private StatisticsInfo buildStatistics(List<DetectedPerson> people,
+                                           List<DetectedObject> objects,
+                                           List<DetectedBook> books) {
+        Map<String, Integer> peopleByAge = people.stream()
+                .collect(Collectors.groupingBy(
+                        p -> p.getAgeCategory().name(),
+                        Collectors.collectingAndThen(Collectors.counting(), Long::intValue)
+                ));
+
+        Map<String, Integer> peopleByEmotion = people.stream()
+                .collect(Collectors.groupingBy(
+                        p -> p.getEmotionalState().name(),
+                        Collectors.collectingAndThen(Collectors.counting(), Long::intValue)
+                ));
+
+        Map<String, Integer> objectsByCategory = objects.stream()
+                .collect(Collectors.groupingBy(
+                        DetectedObject::getCategory,
+                        Collectors.collectingAndThen(Collectors.counting(), Long::intValue)
+                ));
+
+        Double averageConfidence = Stream.concat(
+                people.stream().map(DetectedPerson::getConfidence),
+                objects.stream().map(DetectedObject::getConfidence)
+        ).mapToDouble(Double::doubleValue).average().orElse(0.0);
+
+        Integer uniquePeople = (int) people.stream()
+                .map(DetectedPerson::getUniqueId)
+                .distinct()
+                .count();
+
+        return StatisticsInfo.builder()
+                .totalPeople(people.size())
+                .totalObjects(objects.size())
+                .totalBooks(books.size())
+                .peopleByAge(peopleByAge)
+                .peopleByEmotion(peopleByEmotion)
+                .objectsByCategory(objectsByCategory)
+                .averageConfidence(averageConfidence)
+                .uniquePeople(uniquePeople)
+                .build();
     }
 
-    private String generateSummary(int peopleCount, int objectsCount, int booksCount) {
-        return String.format("Detected %d people, %d objects, and %d books in the media.",
-                peopleCount, objectsCount, booksCount);
-    }
 }

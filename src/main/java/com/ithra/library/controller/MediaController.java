@@ -1,100 +1,112 @@
+// MediaController.java - REST API
 package com.ithra.library.controller;
 
 import com.ithra.library.dto.*;
 import com.ithra.library.entity.MediaFile;
 import com.ithra.library.service.MediaAnalysisService;
-import com.ithra.library.service.QueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
+import org.springframework.data.domain.*;
+import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.servlet.mvc.support.RedirectAttributes;
-import java.util.List;
 
-@Controller
+@RestController
+@RequestMapping("/api/media")
 @RequiredArgsConstructor
 @Slf4j
+@CrossOrigin(origins = "*")
 public class MediaController {
 
     private final MediaAnalysisService mediaAnalysisService;
-    private final QueryService queryService;
 
-    @GetMapping("/")
-    public String index(Model model) {
-        List<MediaFile> mediaFiles = mediaAnalysisService.getAllMediaFiles();
-        model.addAttribute("mediaFiles", mediaFiles);
-        return "index";
-    }
-
+    /**
+     * Upload and analyze media file
+     */
     @PostMapping("/upload")
-    public String uploadFile(@RequestParam("file") MultipartFile file,
-                             RedirectAttributes redirectAttributes) {
+    public ResponseEntity<MediaAnalysisResult> uploadFile(
+            @RequestParam("file") MultipartFile file) {
         try {
+            log.info("Uploading file: {}", file.getOriginalFilename());
+
             if (file.isEmpty()) {
-                redirectAttributes.addFlashAttribute("error", "Please select a file to upload");
-                return "redirect:/";
+                return ResponseEntity.badRequest().build();
             }
 
             MediaFile mediaFile = mediaAnalysisService.uploadFile(file);
+            MediaAnalysisResult result = mediaAnalysisService
+                    .getAnalysisResult(mediaFile.getId());
 
-            redirectAttributes.addFlashAttribute("success",
-                    "File uploaded successfully! Processing started.");
-            redirectAttributes.addFlashAttribute("mediaFileId", mediaFile.getId());
-
-            return "redirect:/result/" + mediaFile.getId();
+            return ResponseEntity.ok(result);
 
         } catch (Exception e) {
             log.error("Error uploading file", e);
-            redirectAttributes.addFlashAttribute("error",
-                    "Failed to upload file: " + e.getMessage());
-            return "redirect:/";
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
 
-    @GetMapping("/result/{id}")
-    public String viewResult(@PathVariable Long id, Model model) {
-        try {
-            MediaAnalysisResult result = mediaAnalysisService.getAnalysisResult(id);
-            model.addAttribute("result", result);
-            return "result";
-        } catch (Exception e) {
-            log.error("Error loading result", e);
-            model.addAttribute("error", "Failed to load analysis result");
-            return "error";
-        }
-    }
-
-    @GetMapping("/api/result/{id}")
-    @ResponseBody
-    public ResponseEntity<Object> getResult(@PathVariable Long id) {
+    /**
+     * Get analysis result by ID
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<MediaAnalysisResult> getAnalysisResult(@PathVariable Long id) {
         try {
             MediaAnalysisResult result = mediaAnalysisService.getAnalysisResult(id);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
-            log.error("Error getting result", e);
+            log.error("Error getting analysis result", e);
             return ResponseEntity.notFound().build();
         }
     }
 
-    @PostMapping("/api/query")
-    @ResponseBody
-    public ResponseEntity<Object> processQuery(@RequestBody QueryRequest request) {
+    /**
+     * List all media files with pagination
+     */
+    @GetMapping
+    public ResponseEntity<Page<MediaAnalysisResult>> listMediaFiles(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String fileType,
+            @RequestParam(required = false) String status) {
         try {
-            QueryResponse response = queryService.processQuery(request);
-            return ResponseEntity.ok(response);
+            Pageable pageable = PageRequest.of(page, size,
+                    Sort.by("uploadDate").descending());
+
+            Page<MediaAnalysisResult> results = mediaAnalysisService
+                    .listMediaFiles(fileType, status, pageable);
+
+            return ResponseEntity.ok(results);
         } catch (Exception e) {
-            log.error("Error processing query", e);
-            return ResponseEntity.badRequest().build();
+            log.error("Error listing media files", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
 
-    @GetMapping("/files")
-    public String listFiles(Model model) {
-        List<MediaFile> files = mediaAnalysisService.getAllMediaFiles();
-        model.addAttribute("files", files);
-        return "files";
+    /**
+     * Delete media file
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteMediaFile(@PathVariable Long id) {
+        try {
+            mediaAnalysisService.deleteMediaFile(id);
+            return ResponseEntity.noContent().build();
+        } catch (Exception e) {
+            log.error("Error deleting media file", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * Get media statistics
+     */
+    @GetMapping("/{id}/statistics")
+    public ResponseEntity<StatisticsInfo> getStatistics(@PathVariable Long id) {
+        try {
+            StatisticsInfo stats = mediaAnalysisService.getStatistics(id);
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            log.error("Error getting statistics", e);
+            return ResponseEntity.notFound().build();
+        }
     }
 }

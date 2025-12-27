@@ -1,8 +1,9 @@
-version: '3.8'
+version: "3.8"
 
 services:
+
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: postgres
     environment:
       POSTGRES_DB: mydb
@@ -19,29 +20,66 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: springboot-app
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     ports:
       - "8080:8080"
     environment:
-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_PROFILES_ACTIVE: docker
+
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/mydb
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
+
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/google-credentials.json
       GOOGLE_CLOUD_PROJECT_ID: ${GOOGLE_CLOUD_PROJECT_ID}
+
+      APP_UPLOAD_DIR: /app/uploads
+      APP_STREAMING_HLS_DIR: /app/hls-streams
+
     volumes:
       - ./credentials:/app/credentials:ro
+      - upload_data:/app/uploads
+      - hls_data:/app/hls-streams
+      - ./logs:/app/logs
+
     networks:
       - app-network
     restart: unless-stopped
 
 volumes:
-  pgdata:
+  pgdata:           # ✅ SAME AS OLD → DATA PRESERVED
+  redis_data:
+  upload_data:
+  hls_data:
 
 networks:
   app-network:

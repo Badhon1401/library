@@ -1,14 +1,24 @@
-# Use Eclipse Temurin JDK 17
 FROM eclipse-temurin:17-jdk-alpine
 
-# Set working directory
 WORKDIR /app
 
-# Copy built jar into container
-COPY target/*.jar app.jar
+COPY --from=builder /build/target/*.jar app.jar
 
-# Expose port
+RUN mkdir -p /app/uploads /app/hls-streams /app/logs /app/credentials && \
+    addgroup -S appuser && adduser -S appuser -G appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
 EXPOSE 8080
 
-# Run the app
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8080/actuator/health || exit 1
+
+ENV JAVA_OPTS="-Xms512m -Xmx4g \
+    -XX:+UseG1GC \
+    -XX:MaxGCPauseMillis=200 \
+    -XX:+UseStringDeduplication \
+    -Djava.security.egd=file:/dev/./urandom"
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

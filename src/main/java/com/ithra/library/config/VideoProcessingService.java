@@ -1,14 +1,15 @@
-package com.ithra.library.service;
+package com.ithra.library.config;
 
 import lombok.extern.slf4j.Slf4j;
-import org.bytedeco.javacv.*;
-import org.bytedeco.opencv.opencv_core.IplImage;
+import org.bytedeco.javacv.FFmpegFrameGrabber;
+import org.bytedeco.javacv.Frame;
+import org.bytedeco.javacv.Java2DFrameConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -53,7 +54,7 @@ public class VideoProcessingService {
 
                         frames.add(videoFrame);
 
-                        log.info("Extracted frame {} at timestamp {}", frameCount, timestamp);
+                        log.debug("Extracted frame {} at timestamp {}", frameCount, timestamp);
                     }
                 }
                 frameCount++;
@@ -76,13 +77,28 @@ public class VideoProcessingService {
         private double timestamp;
         private byte[] imageBytes;
 
-        public int getFrameNumber() { return frameNumber; }
-        public void setFrameNumber(int frameNumber) { this.frameNumber = frameNumber; }
+        public int getFrameNumber() {
+            return frameNumber;
+        }
 
-        public double getTimestamp() { return timestamp; }
-        public void setTimestamp(double timestamp) { this.timestamp = timestamp; }
+        public void setFrameNumber(int frameNumber) {
+            this.frameNumber = frameNumber;
+        }
 
-        public byte[] getImageBytes() { return imageBytes; }
-        public void setImageBytes(byte[] imageBytes) { this.imageBytes = imageBytes; }
+        public double getTimestamp() {
+            return timestamp;
+        }
+
+        public void setTimestamp(double timestamp) {
+            this.timestamp = timestamp;
+        }
+
+        public byte[] getImageBytes() {
+            return imageBytes;
+        }
+
+        public void setImageBytes(byte[] imageBytes) {
+            this.imageBytes = imageBytes;
+        }
     }
 }

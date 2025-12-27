@@ -9,12 +9,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class QueryMatch {
-    private String type;
+public class LiveStreamRequest {
+    private String streamName;
     private String description;
-    private Integer frameNumber;
-    private Double timestamp;
-    private Double confidence;
-    private BoundingBox boundingBox;
-    private String aiContext;
+    private StreamConfig config;
 }
